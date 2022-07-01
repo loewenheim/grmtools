@@ -5,11 +5,24 @@ use try_from::TryFrom;
 use crate::{lexer::Rule, LexBuildError, LexBuildResult, LexErrorKind};
 
 type LexInternalBuildResult<T> = Result<T, LexBuildError>;
+#[derive(Debug)]
+pub struct StartState {
+    pub(super) id: usize,
+    pub(super) name: String,
+    pub(super) exclusive: bool,
+}
+
+impl StartState {
+    pub fn new(id: usize, name: &str, exclusive: bool) -> Self {
+        Self {id, name: name.to_string(), exclusive}
+    }
+}
 
 pub(super) struct LexParser<StorageT> {
     src: String,
     pub(super) rules: Vec<Rule<StorageT>>,
     duplicate_names: HashMap<Span, Vec<Span>>,
+    pub(super) start_states: Vec<StartState>,
 }
 
 impl<StorageT: TryFrom<usize>> LexParser<StorageT> {
@@ -18,6 +31,7 @@ impl<StorageT: TryFrom<usize>> LexParser<StorageT> {
             src,
             rules: Vec::new(),
             duplicate_names: HashMap::new(),
+            start_states: vec![StartState::new(0, "INITIAL", false)],
         };
         p.parse()?;
         Ok(p)
@@ -57,17 +71,51 @@ impl<StorageT: TryFrom<usize>> LexParser<StorageT> {
     }
 
     fn parse_declarations(&mut self, mut i: usize) -> LexInternalBuildResult<usize> {
+        loop {
         i = self.parse_ws(i)?;
-        if let Some(j) = self.lookahead_is("%%", i) {
-            return Ok(j);
+        if i == self.src.len() {
+            break Err(self.mk_error(LexErrorKind::PrematureEnd, i - 1))
         }
-        if i < self.src.len() {
-            Err(self.mk_error(LexErrorKind::UnknownDeclaration, i))
-        } else {
-            Err(self.mk_error(LexErrorKind::PrematureEnd, i - 1))
+        if let Some(j) = self.lookahead_is("%%", i) {
+            break Ok(j);
+        }
+        i = self.parse_declaration(i)?;
         }
     }
 
+    fn parse_declaration(&mut self, mut i: usize) -> LexInternalBuildResult<usize> {
+        let line_len = self.src[i..]
+            .find(|c| c == '\n')
+            .unwrap_or(self.src.len() - i);
+        let line = self.src[i..i + line_len].trim_end();
+        let declaration_len = line.find(|c: char| c.is_whitespace()).unwrap_or(line_len);
+        let declaration = self.src[i..i + declaration_len].trim_end();
+        match declaration {
+            "%x" => {
+                for name in self.src[i+declaration_len..i+line_len].trim().split_whitespace() {
+                    println!("exclusive_start_state {name}");
+                    let id = self.start_states.len();
+                    let start_state = StartState::new(id, name, true);
+                    self.start_states.push(start_state);
+                }
+                Ok(i + line_len)
+            },
+            "%s" => {
+                for name in self.src[i+declaration_len..i+line_len].trim().split_whitespace() {
+                    println!("start_state {name}");
+                    let id = self.start_states.len();
+                    let start_state = StartState::new(id, name, false);
+                    self.start_states.push(start_state);
+                }
+                Ok(i + line_len)
+            }
+            decl => {
+                println!("UnknownDeclaration: {decl}");
+                Err(self.mk_error(LexErrorKind::UnknownDeclaration, i))
+            }
+        }
+    }
+    
     fn parse_rules(&mut self, mut i: usize) -> LexInternalBuildResult<usize> {
         loop {
             i = self.parse_ws(i)?;
@@ -93,7 +141,28 @@ impl<StorageT: TryFrom<usize>> LexParser<StorageT> {
         };
 
         let name;
-        let orig_name = &line[rspace + 1..];
+        let target_state;
+        let orig_name = if line[rspace+1..].starts_with('<') {
+            match line[rspace+1..].find('>') {
+                Some(l) => {
+                    target_state = self.get_start_state_by_name(&line[rspace+2..rspace+1+l]).map(|s| s.id);
+                    dbg!(target_state);
+                    if target_state.is_none() {
+                        &line[rspace + 1..]
+                    } else {
+                        &line[rspace + 1 + l + 1..]
+                    }
+                },
+                None => {
+                    target_state = None;
+                    &line[rspace + 1..]
+                }
+            }
+        } else {
+            target_state = None;
+            &line[rspace + 1..]
+        };
+        dbg!(orig_name);
         let name_span;
         let dupe = if orig_name == ";" {
             name = None;
@@ -105,6 +174,7 @@ impl<StorageT: TryFrom<usize>> LexParser<StorageT> {
             if !((orig_name.starts_with('\'') && orig_name.ends_with('\''))
                 || (orig_name.starts_with('\"') && orig_name.ends_with('"')))
             {
+                dbg!(orig_name);
                 return Err(self.mk_error(LexErrorKind::InvalidName, i + rspace + 1));
             }
             name = Some(orig_name[1..orig_name.len() - 1].to_string());
@@ -125,16 +195,42 @@ impl<StorageT: TryFrom<usize>> LexParser<StorageT> {
         };
 
         if !dupe {
-            let re_str = line[..rspace].trim_end().to_string();
+            let (start_states, re_str) = self.parse_start_states(line[..rspace].trim_end());
+            //let re_str = line[..rspace].trim_end().to_string();
             let rules_len = self.rules.len();
             let tok_id = StorageT::try_from(rules_len)
                            .unwrap_or_else(|_| panic!("StorageT::try_from failed on {} (if StorageT is an unsigned integer type, this probably means that {} exceeds the type's maximum value)", rules_len, rules_len));
 
-            let rule = Rule::new(Some(tok_id), name, name_span, re_str)
+            let rule = Rule::new(Some(tok_id), name, name_span, re_str.to_string(), start_states, target_state)
                 .map_err(|_| self.mk_error(LexErrorKind::RegexError, i))?;
             self.rules.push(rule);
         }
         Ok(i + line_len)
+    }
+            
+    // TODO Should return LexInternalBuildResult<?>
+    fn parse_start_states<'a>(&self, re_str: &'a str) -> (Vec<usize>, &'a str) {
+        if !re_str.starts_with('<') {
+            (vec![], re_str)
+        } else {
+            match re_str.find('>') {
+                None => (vec![], re_str),
+                Some(j) => {
+                    let start_states = re_str[1..j]
+                    .split(',')
+                    .map(|s| s.trim())
+                    .map(|s| self.get_start_state_by_name(s))
+                    // TODO: Handle the case where start state DOESN'T exist
+                    .filter_map(|s| s.map(|ss| ss.id))
+                    .collect();
+                    (start_states, &re_str[j+1..])
+                }
+            }
+        }
+    }
+
+    fn get_start_state_by_name(&self, state: &str) -> Option<&StartState> {
+        self.start_states.iter().find(|r| r.name == state)
     }
 
     fn parse_ws(&mut self, i: usize) -> LexInternalBuildResult<usize> {

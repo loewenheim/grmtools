@@ -24,6 +24,7 @@ pub use crate::{
     ctbuilder::{ct_token_map, CTLexer, CTLexerBuilder, LexerKind, Visibility},
     lexemes::DefaultLexeme,
     lexer::{LRNonStreamingLexer, LRNonStreamingLexerDef, LexerDef, Rule},
+    parser::StartState,
 };
 
 use cfgrammar::Span;
