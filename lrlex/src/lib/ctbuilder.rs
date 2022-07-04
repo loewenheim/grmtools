@@ -411,8 +411,11 @@ pub fn lexerdef() -> {lexerdef_type} {{
 
         outs.push_str("    let start_states: Vec<StartState> = vec![");
         for ss in lexerdef.iter_start_states() {
-            outs.push_str(&format!("
-        StartState::new({}, {:?}, {}),", ss.id, ss.name, ss.exclusive));
+            outs.push_str(&format!(
+                "
+        StartState::new({}, {:?}, {}),",
+                ss.id, ss.name, ss.exclusive
+            ));
         }
         outs.push_str("\n    ];\n");
         outs.push_str("    let rules = vec![");

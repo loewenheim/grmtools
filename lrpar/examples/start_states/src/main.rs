@@ -4,16 +4,16 @@ use cfgrammar::RIdx;
 use lrlex::{lrlex_mod, DefaultLexeme};
 use lrpar::{lrpar_mod, Lexeme, Node};
 
-// Using `lrlex_mod!` brings the lexer for `calc.l` into scope. By default the module name will be
-// `calc_l` (i.e. the file name, minus any extensions, with a suffix of `_l`).
-lrlex_mod!("calc.l");
-// Using `lrpar_mod!` brings the parser for `calc.y` into scope. By default the module name will be
-// `calc_y` (i.e. the file name, minus any extensions, with a suffix of `_y`).
-lrpar_mod!("calc.y");
+// Using `lrlex_mod!` brings the lexer for `comment.l` into scope. By default the module name will be
+// `comment_l` (i.e. the file name, minus any extensions, with a suffix of `_l`).
+lrlex_mod!("comment.l");
+// Using `lrpar_mod!` brings the parser for `comment.y` into scope. By default the module name will be
+// `comment_y` (i.e. the file name, minus any extensions, with a suffix of `_y`).
+lrpar_mod!("comment.y");
 
 fn main() {
-    // Get the `LexerDef` for the `calc` language.
-    let lexerdef = calc_l::lexerdef();
+    // Get the `LexerDef` for the `comment` language.
+    let lexerdef = comment_l::lexerdef();
     let stdin = io::stdin();
     loop {
         print!(">>> ");
@@ -26,9 +26,9 @@ fn main() {
                 // Now we create a lexer with the `lexer` method with which we can lex an input.
                 let lexer = lexerdef.lexer(l);
                 // Pass the lexer to the parser and lex and parse the input.
-                let (pt, errs) = calc_y::parse(&lexer);
+                let (pt, errs) = comment_y::parse(&lexer);
                 for e in errs {
-                    println!("{}", e.pp(&lexer, &calc_y::token_epp));
+                    println!("{}", e.pp(&lexer, &comment_y::token_epp));
                 }
                 if let Some(pt) = pt {
                     // Success! We parsed the input and created a parse tree.
@@ -54,7 +54,7 @@ impl<'a> Eval<'a> {
             Node::Nonterm {
                 ridx: RIdx(ridx),
                 ref nodes,
-            } if ridx == calc_y::R_EXPR => {
+            } if ridx == comment_y::R_EXPR => {
                 let mut s = String::new();
                 for node in nodes {
                     s.push_str(&self.eval(node));
@@ -64,11 +64,10 @@ impl<'a> Eval<'a> {
             Node::Nonterm {
                 ridx: RIdx(ridx),
                 ref nodes,
-            } if ridx == calc_y::R_TEXT => {
+            } if ridx == comment_y::R_TEXT => {
                 if nodes.len() == 1 {
                     if let Node::Term { lexeme } = nodes[0] {
-                        self.s[lexeme.span().start()..lexeme.span().end()]
-                            .to_string()
+                        self.s[lexeme.span().start()..lexeme.span().end()].to_string()
                     } else {
                         unreachable!();
                     }
