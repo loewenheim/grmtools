@@ -150,14 +150,12 @@ impl<StorageT: TryFrom<usize>> LexParser<StorageT> {
         let orig_name = if line[rspace + 1..].starts_with('<') {
             match line[rspace + 1..].find('>') {
                 Some(l) => {
-                    target_state = self
-                        .get_start_state_by_name(&line[rspace + 2..rspace + 1 + l])
-                        .map(|s| s.id);
-                    if target_state.is_none() {
-                        &line[rspace + 1..]
-                    } else {
-                        &line[rspace + 1 + l + 1..]
-                    }
+                    let state = self.get_start_state_by_name(
+                        i + rspace + 1,
+                        &line[rspace + 2..rspace + 1 + l],
+                    )?;
+                    target_state = Some(state.id);
+                    &line[rspace + 1 + l + 1..]
                 }
                 None => {
                     target_state = None;
@@ -199,8 +197,7 @@ impl<StorageT: TryFrom<usize>> LexParser<StorageT> {
         };
 
         if !dupe {
-            let (start_states, re_str) = self.parse_start_states(line[..rspace].trim_end());
-            //let re_str = line[..rspace].trim_end().to_string();
+            let (start_states, re_str) = self.parse_start_states(i, line[..rspace].trim_end())?;
             let rules_len = self.rules.len();
             let tok_id = StorageT::try_from(rules_len)
                            .unwrap_or_else(|_| panic!("StorageT::try_from failed on {} (if StorageT is an unsigned integer type, this probably means that {} exceeds the type's maximum value)", rules_len, rules_len));
@@ -219,29 +216,38 @@ impl<StorageT: TryFrom<usize>> LexParser<StorageT> {
         Ok(i + line_len)
     }
 
-    // TODO Should return LexInternalBuildResult<?>
-    fn parse_start_states<'a>(&self, re_str: &'a str) -> (Vec<usize>, &'a str) {
+    fn parse_start_states<'a>(
+        &self,
+        off: usize,
+        re_str: &'a str,
+    ) -> LexInternalBuildResult<(Vec<usize>, &'a str)> {
         if !re_str.starts_with('<') {
-            (vec![], re_str)
+            Ok((vec![], re_str))
         } else {
             match re_str.find('>') {
-                None => (vec![], re_str),
+                None => Ok((vec![], re_str)),
                 Some(j) => {
                     let start_states = re_str[1..j]
                         .split(',')
                         .map(|s| s.trim())
-                        .map(|s| self.get_start_state_by_name(s))
-                        // TODO: Handle the case where start state DOESN'T exist
-                        .filter_map(|s| s.map(|ss| ss.id))
-                        .collect();
-                    (start_states, &re_str[j + 1..])
+                        .map(|s| self.get_start_state_by_name(off, s))
+                        .map(|s| s.map(|ss| ss.id))
+                        .collect::<LexInternalBuildResult<Vec<usize>>>()?;
+                    Ok((start_states, &re_str[j + 1..]))
                 }
             }
         }
     }
 
-    fn get_start_state_by_name(&self, state: &str) -> Option<&StartState> {
-        self.start_states.iter().find(|r| r.name == state)
+    fn get_start_state_by_name(
+        &self,
+        off: usize,
+        state: &str,
+    ) -> LexInternalBuildResult<&StartState> {
+        self.start_states
+            .iter()
+            .find(|r| r.name == state)
+            .ok_or_else(|| self.mk_error(LexErrorKind::UnknownStartState, off))
     }
 
     fn parse_ws(&mut self, i: usize) -> LexInternalBuildResult<usize> {
@@ -455,6 +461,75 @@ mod test {
                 assert_eq!(spans, &[Span::new(22, 25), Span::new(34, 37)])
             }
 
+            Err(e) => incorrect_errs!(src, e),
+        }
+    }
+
+    #[test]
+    fn known_current_start_state() {
+        let src = "%s KNOWN
+%%
+<KNOWN>. 'known'"
+            .to_string();
+        let ast = LRNonStreamingLexerDef::<DefaultLexeme<u8>, u8>::from_str(&src).unwrap();
+        let intrule = ast.get_rule(0).unwrap();
+        assert_eq!("known", intrule.name.as_ref().unwrap());
+        assert_eq!(".", intrule.re_str);
+        assert!(intrule.target_state.is_none());
+        assert_eq!(1, intrule.start_states.len());
+        assert_eq!(1, *intrule.start_states.get(0).unwrap());
+    }
+
+    #[test]
+    fn unknown_current_start_state() {
+        let src = "%%
+<UNKNOWN>. 'unknown'"
+            .to_string();
+        match LRNonStreamingLexerDef::<DefaultLexeme<u8>, u8>::from_str(&src)
+            .as_ref()
+            .map_err(Vec::as_slice)
+        {
+            Ok(_) => panic!("Parsing should fail"),
+            Err(
+                [LexBuildError {
+                    kind: LexErrorKind::UnknownStartState,
+                    span,
+                }],
+            ) if line_col!(src, span) == (2, 1) => (),
+            Err(e) => incorrect_errs!(src, e),
+        }
+    }
+
+    #[test]
+    fn known_target_start_state() {
+        let src = "%s KNOWN
+%%
+. <KNOWN>'known'"
+            .to_string();
+        let ast = LRNonStreamingLexerDef::<DefaultLexeme<u8>, u8>::from_str(&src).unwrap();
+        let intrule = ast.get_rule(0).unwrap();
+        assert_eq!("known", intrule.name.as_ref().unwrap());
+        assert_eq!(".", intrule.re_str);
+        assert_eq!(1, intrule.target_state.unwrap());
+        assert_eq!(0, intrule.start_states.len());
+    }
+
+    #[test]
+    fn unknown_target_start_state() {
+        let src = "%%
+. <UNKNOWN>'unknown'"
+            .to_string();
+        match LRNonStreamingLexerDef::<DefaultLexeme<u8>, u8>::from_str(&src)
+            .as_ref()
+            .map_err(Vec::as_slice)
+        {
+            Ok(_) => panic!("Parsing should fail"),
+            Err(
+                [LexBuildError {
+                    kind: LexErrorKind::UnknownStartState,
+                    span,
+                }],
+            ) if line_col!(src, span) == (2, 3) => (),
             Err(e) => incorrect_errs!(src, e),
         }
     }
