@@ -49,6 +49,9 @@ pub enum LexErrorKind {
     MissingSpace,
     InvalidName,
     UnknownStartState,
+    DuplicateStartState,
+    InvalidStartState,
+    InvalidStartStateName,
     DuplicateName(Vec<Span>),
     RegexError,
 }
@@ -62,6 +65,9 @@ impl fmt::Display for LexBuildError {
             LexErrorKind::MissingSpace => "Rule is missing a space",
             LexErrorKind::InvalidName => "Invalid rule name",
             LexErrorKind::UnknownStartState => "Start state not known",
+            LexErrorKind::DuplicateStartState => "Start state already exists",
+            LexErrorKind::InvalidStartState => "Invalid start state",
+            LexErrorKind::InvalidStartStateName => "Invalid start state",
             LexErrorKind::DuplicateName(_) => "Rule name already exists",
             LexErrorKind::RegexError => "Invalid regular expression",
         };

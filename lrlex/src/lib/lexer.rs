@@ -30,7 +30,11 @@ pub struct Rule<StorageT> {
     pub name_span: Span,
     pub(super) re_str: String,
     re: Regex,
+    /// Id(s) of permitted start conditions for the lexer to match this rule.
     pub start_states: Vec<usize>,
+    /// If Some(state), successful matching of this rule will cause the current start condition of
+    /// the lexer to be changed to the enclosed value. If none, successful matching causes no change
+    /// to the current start condition.
     pub target_state: Option<usize>,
 }
 
@@ -237,7 +241,7 @@ impl<
     ) -> LRNonStreamingLexer<'lexer, 'input, LexemeT, StorageT> {
         let mut lexemes = vec![];
         let mut i = 0;
-        let state = self.get_start_state_by_name("INITIAL");
+        let state = self.get_start_state_by_id(0);
         let mut state = match state {
             None => {
                 lexemes.push(Err(LexError::new(Span::new(i, i))));
@@ -300,10 +304,6 @@ impl<
         } else {
             rule_states.contains(&state.id)
         }
-    }
-
-    fn get_start_state_by_name(&self, name: &str) -> Option<&StartState> {
-        self.start_states.iter().find(|state| state.name == name)
     }
 
     fn get_start_state_by_id(&self, id: usize) -> Option<&StartState> {

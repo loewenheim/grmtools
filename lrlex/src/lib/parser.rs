@@ -1,14 +1,31 @@
 use cfgrammar::Span;
-use std::collections::HashMap;
+use lazy_static::lazy_static;
+use regex::Regex;
+use std::collections::{HashMap, HashSet};
 use try_from::TryFrom;
 
 use crate::{lexer::Rule, LexBuildError, LexBuildResult, LexErrorKind};
 
 type LexInternalBuildResult<T> = Result<T, LexBuildError>;
+
+lazy_static! {
+    static ref RE_START_STATE_NAME: Regex = Regex::new(r"^[a-zA-Z][a-zA-Z0-9_.]*$").unwrap();
+}
+const INITIAL_START_STATE_NAME: &str = "INITIAL";
+
 #[derive(Debug)]
+#[doc(hidden)]
 pub struct StartState {
+    /// Associated id of this start state - rules which have this start state
+    /// as a prerequisite, or which transition to this start state will store
+    /// this id in their appropriate fields.
     pub(super) id: usize,
+    /// Name of this start state, as supplied in the declaration section, and
+    /// used in prerequisite and target start state sections of the rules.
     pub(super) name: String,
+    /// If false, a rule with _no_ start state will match when this state is active.
+    /// If true, only rules which have include this start state will match when
+    /// this state is active.
     pub(super) exclusive: bool,
 }
 
@@ -35,7 +52,7 @@ impl<StorageT: TryFrom<usize>> LexParser<StorageT> {
             src,
             rules: Vec::new(),
             duplicate_names: HashMap::new(),
-            start_states: vec![StartState::new(0, "INITIAL", false)],
+            start_states: vec![StartState::new(0, INITIAL_START_STATE_NAME, false)],
         };
         p.parse()?;
         Ok(p)
@@ -96,21 +113,27 @@ impl<StorageT: TryFrom<usize>> LexParser<StorageT> {
         let declaration = self.src[i..i + declaration_len].trim_end();
         match declaration {
             "%x" => {
-                for name in self.src[i + declaration_len..i + line_len]
+                let start_states: HashSet<&str> = self.src[i + declaration_len..i + line_len]
                     .trim()
                     .split_whitespace()
-                {
+                    .map(|name| self.validate_start_state(i, name))
+                    .collect::<LexInternalBuildResult<HashSet<&str>>>()?;
+
+                for name in start_states {
                     let id = self.start_states.len();
                     let start_state = StartState::new(id, name, true);
                     self.start_states.push(start_state);
                 }
                 Ok(i + line_len)
             }
-            "%s" => {
-                for name in self.src[i + declaration_len..i + line_len]
+            _ if (declaration.to_lowercase()=="%s" || declaration.to_lowercase()=="%start") => {
+                let start_states: HashSet<&str> = self.src[i + declaration_len..i + line_len]
                     .trim()
                     .split_whitespace()
-                {
+                    .map(|name| self.validate_start_state(i, name))
+                    .collect::<LexInternalBuildResult<HashSet<&str>>>()?;
+
+                for name in start_states {
                     let id = self.start_states.len();
                     let start_state = StartState::new(id, name, false);
                     self.start_states.push(start_state);
@@ -118,6 +141,26 @@ impl<StorageT: TryFrom<usize>> LexParser<StorageT> {
                 Ok(i + line_len)
             }
             _ => Err(self.mk_error(LexErrorKind::UnknownDeclaration, i)),
+        }
+    }
+
+    fn validate_start_state<'a>(
+        &self,
+        off: usize,
+        name: &'a str,
+    ) -> LexInternalBuildResult<&'a str> {
+        self.validate_start_state_name(off, name)?;
+        if self.start_states.iter().any(|state| state.name == name) {
+            Err(self.mk_error(LexErrorKind::DuplicateStartState, off))
+        } else {
+            Ok(name)
+        }
+    }
+
+    fn validate_start_state_name(&self, off: usize, name: &str) -> LexInternalBuildResult<()> {
+        match RE_START_STATE_NAME.is_match(name) {
+            true => Ok(()),
+            false => Err(self.mk_error(LexErrorKind::InvalidStartStateName, off)),
         }
     }
 
@@ -157,10 +200,7 @@ impl<StorageT: TryFrom<usize>> LexParser<StorageT> {
                     target_state = Some(state.id);
                     &line[rspace + 1 + l + 1..]
                 }
-                None => {
-                    target_state = None;
-                    &line[rspace + 1..]
-                }
+                None => return Err(self.mk_error(LexErrorKind::InvalidStartState, rspace + i)),
             }
         } else {
             target_state = None;
@@ -225,7 +265,7 @@ impl<StorageT: TryFrom<usize>> LexParser<StorageT> {
             Ok((vec![], re_str))
         } else {
             match re_str.find('>') {
-                None => Ok((vec![], re_str)),
+                None => Err(self.mk_error(LexErrorKind::InvalidStartState, off)),
                 Some(j) => {
                     let start_states = re_str[1..j]
                         .split(',')
@@ -534,6 +574,189 @@ mod test {
         }
     }
 
+    #[test]
+    fn unterminated_required_start_state() {
+        let src = "%%
+<test. 'TEST'"
+            .to_string();
+        match LRNonStreamingLexerDef::<DefaultLexeme<u8>, u8>::from_str(&src)
+            .as_ref()
+            .map_err(Vec::as_slice)
+        {
+            Ok(_) => panic!("Parsing should fail"),
+            Err(
+                [LexBuildError {
+                    kind: LexErrorKind::InvalidStartState,
+                    span,
+                }],
+            ) if line_col!(src, span) == (2, 1) => (),
+            Err(e) => incorrect_errs!(src, e),
+        }
+    }
+
+    #[test]
+    fn unterminated_transition_start_state() {
+        let src = "%%
+. <test'TEST'"
+            .to_string();
+        match LRNonStreamingLexerDef::<DefaultLexeme<u8>, u8>::from_str(&src)
+            .as_ref()
+            .map_err(Vec::as_slice)
+        {
+            Ok(_) => panic!("Parsing should fail"),
+            Err(
+                [LexBuildError {
+                    kind: LexErrorKind::InvalidStartState,
+                    span,
+                }],
+            ) if line_col!(src, span) == (2, 2) => (),
+            Err(e) => incorrect_errs!(src, e),
+        }
+    }
+
+    #[test]
+    fn invalid_start_state_definition() {
+        let src = "%x 1test
+%%
+. 'TEST'"
+            .to_string();
+        match LRNonStreamingLexerDef::<DefaultLexeme<u8>, u8>::from_str(&src)
+            .as_ref()
+            .map_err(Vec::as_slice)
+        {
+            Ok(_) => panic!("Parsing should fail"),
+            Err(
+                [LexBuildError {
+                    kind: LexErrorKind::InvalidStartStateName,
+                    span,
+                }],
+            ) if line_col!(src, span) == (1, 1) => (),
+            Err(e) => incorrect_errs!(src, e),
+        }
+    }
+
+    #[test]
+    fn long_form_start_state_definition() {
+        let src = "%START test
+%%
+. 'TEST'"
+            .to_string();
+        let ast = LRNonStreamingLexerDef::<DefaultLexeme<u8>, u8>::from_str(&src).unwrap();
+        // Expect two start states - INITIAL + test
+        assert_eq!(2, ast.iter_start_states().count());
+        assert!(ast.iter_start_states().any(|ss| !ss.exclusive && ss.name==INITIAL_START_STATE_NAME));
+        assert!(ast.iter_start_states().any(|ss| !ss.exclusive && ss.name=="test"));
+    }
+
+    #[test]
+    fn short_form_start_state_definition() {
+        let src = "%S test
+%%
+. 'TEST'"
+            .to_string();
+        let ast = LRNonStreamingLexerDef::<DefaultLexeme<u8>, u8>::from_str(&src).unwrap();
+        // Expect two start states - INITIAL + test
+        assert_eq!(2, ast.iter_start_states().count());
+        assert!(ast.iter_start_states().any(|ss| !ss.exclusive && ss.name==INITIAL_START_STATE_NAME));
+        assert!(ast.iter_start_states().any(|ss| !ss.exclusive && ss.name=="test"));
+    }
+
+    #[test]
+    fn exclusive_start_state_definition() {
+        let src = "%x test
+%%
+. 'TEST'"
+            .to_string();
+        let ast = LRNonStreamingLexerDef::<DefaultLexeme<u8>, u8>::from_str(&src).unwrap();
+        // Expect two start states - INITIAL + test
+        assert_eq!(2, ast.iter_start_states().count());
+        assert!(ast.iter_start_states().any(|ss| !ss.exclusive && ss.name==INITIAL_START_STATE_NAME));
+        assert!(ast.iter_start_states().any(|ss| ss.exclusive && ss.name=="test"));
+    }
+
+    #[test]
+    fn duplicate_start_state_definition() {
+        let src = "%s test
+%s test
+%%
+. 'TEST'"
+            .to_string();
+        match LRNonStreamingLexerDef::<DefaultLexeme<u8>, u8>::from_str(&src)
+            .as_ref()
+            .map_err(Vec::as_slice)
+        {
+            Ok(_) => panic!("Parsing should fail"),
+            Err(
+                [LexBuildError {
+                    kind: LexErrorKind::DuplicateStartState,
+                    span,
+                }],
+            ) if line_col!(src, span) == (2, 1) => (),
+            Err(e) => incorrect_errs!(src, e),
+        }
+    }
+
+    #[test]
+    fn inconsistent_duplicate_start_state_definition() {
+        let src = "%x test
+%s test
+%%
+. 'TEST'"
+            .to_string();
+        match LRNonStreamingLexerDef::<DefaultLexeme<u8>, u8>::from_str(&src)
+            .as_ref()
+            .map_err(Vec::as_slice)
+        {
+            Ok(_) => panic!("Parsing should fail"),
+            Err(
+                [LexBuildError {
+                    kind: LexErrorKind::DuplicateStartState,
+                    span,
+                }],
+            ) if line_col!(src, span) == (2, 1) => (),
+            Err(e) => incorrect_errs!(src, e),
+        }
+    }
+
+    #[test]
+    fn invalid_required_start_state() {
+        let src = "%%
+<1test>. 'TEST'"
+            .to_string();
+        match LRNonStreamingLexerDef::<DefaultLexeme<u8>, u8>::from_str(&src)
+            .as_ref()
+            .map_err(Vec::as_slice)
+        {
+            Ok(_) => panic!("Parsing should fail"),
+            Err(
+                [LexBuildError {
+                    kind: LexErrorKind::UnknownStartState,
+                    span,
+                }],
+            ) if line_col!(src, span) == (2, 1) => (),
+            Err(e) => incorrect_errs!(src, e),
+        }
+    }
+
+    #[test]
+    fn invalid_transition_start_state() {
+        let src = "%%
+. <1test>'TEST'"
+            .to_string();
+        match LRNonStreamingLexerDef::<DefaultLexeme<u8>, u8>::from_str(&src)
+            .as_ref()
+            .map_err(Vec::as_slice)
+        {
+            Ok(_) => panic!("Parsing should fail"),
+            Err(
+                [LexBuildError {
+                    kind: LexErrorKind::UnknownStartState,
+                    span,
+                }],
+            ) if line_col!(src, span) == (2, 3) => (),
+            Err(e) => incorrect_errs!(src, e),
+        }
+    }
     #[test]
     #[should_panic]
     fn exceed_tok_id_capacity() {
