@@ -158,10 +158,10 @@ impl<StorageT: TryFrom<usize>> LexParser<StorageT> {
     }
 
     fn validate_start_state_name(&self, off: usize, name: &str) -> LexInternalBuildResult<()> {
-        match RE_START_STATE_NAME.is_match(name) {
-            true => Ok(()),
-            false => Err(self.mk_error(LexErrorKind::InvalidStartStateName, off)),
+        if !RE_START_STATE_NAME.is_match(name) {
+            return Err(self.mk_error(LexErrorKind::InvalidStartStateName, off));
         }
+        Ok(())
     }
 
     fn parse_rules(&mut self, mut i: usize) -> LexInternalBuildResult<usize> {
