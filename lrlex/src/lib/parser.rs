@@ -10,6 +10,8 @@ type LexInternalBuildResult<T> = Result<T, LexBuildError>;
 
 lazy_static! {
     static ref RE_START_STATE_NAME: Regex = Regex::new(r"^[a-zA-Z][a-zA-Z0-9_.]*$").unwrap();
+    static ref RE_INCLUSIVE_START_STATE_DECLARATION: Regex = Regex::new(r"^%[sS][a-zA-Z0-9]*$").unwrap();
+    static ref RE_EXCLUSIVE_START_STATE_DECLARATION: Regex = Regex::new(r"^%[xX][a-zA-Z0-9]*$").unwrap();
 }
 const INITIAL_START_STATE_NAME: &str = "INITIAL";
 
@@ -111,37 +113,35 @@ impl<StorageT: TryFrom<usize>> LexParser<StorageT> {
         let line = self.src[i..i + line_len].trim_end();
         let declaration_len = line.find(|c: char| c.is_whitespace()).unwrap_or(line_len);
         let declaration = self.src[i..i + declaration_len].trim_end();
-        match declaration {
-            "%x" => {
-                let start_states: HashSet<&str> = self.src[i + declaration_len..i + line_len]
-                    .trim()
-                    .split_whitespace()
-                    .map(|name| self.validate_start_state(i, name))
-                    .collect::<LexInternalBuildResult<HashSet<&str>>>()?;
-
-                for name in start_states {
-                    let id = self.start_states.len();
-                    let start_state = StartState::new(id, name, true);
-                    self.start_states.push(start_state);
-                }
-                Ok(i + line_len)
-            }
-            _ if (declaration.to_lowercase()=="%s" || declaration.to_lowercase()=="%start") => {
-                let start_states: HashSet<&str> = self.src[i + declaration_len..i + line_len]
-                    .trim()
-                    .split_whitespace()
-                    .map(|name| self.validate_start_state(i, name))
-                    .collect::<LexInternalBuildResult<HashSet<&str>>>()?;
-
-                for name in start_states {
-                    let id = self.start_states.len();
-                    let start_state = StartState::new(id, name, false);
-                    self.start_states.push(start_state);
-                }
-                Ok(i + line_len)
-            }
-            _ => Err(self.mk_error(LexErrorKind::UnknownDeclaration, i)),
+        // Any line beginning with a '%' (percent sign) character and followed by an alphanumeric word 
+        // beginning with either 's' or 'S' shall define a set of start conditions.
+        // Any line beginning with a '%' followed by an alphanumeric word beginning with either
+        // 'x' or 'X' shall define a set of exclusive start conditions.
+        // The rest of the line, after the first word, is considered to be one or more
+        // blank-character-separated names of start conditions.
+        if RE_INCLUSIVE_START_STATE_DECLARATION.is_match(declaration) {
+            self.declare_start_states(false, i, declaration_len, line_len)
         }
+        else if RE_EXCLUSIVE_START_STATE_DECLARATION.is_match(declaration) {
+            self.declare_start_states(true, i, declaration_len, line_len)
+        } else {
+            Err(self.mk_error(LexErrorKind::UnknownDeclaration, i))
+        }
+    }
+
+    fn declare_start_states(&mut self, exclusive: bool, off: usize, declaration_len: usize, line_len: usize) -> LexInternalBuildResult<usize> {
+        let start_states: HashSet<&str> = self.src[off + declaration_len..off + line_len]
+            .trim()
+            .split_whitespace()
+            .map(|name| self.validate_start_state(off, name))
+            .collect::<LexInternalBuildResult<HashSet<&str>>>()?;
+
+        for name in start_states {
+            let id = self.start_states.len();
+            let start_state = StartState::new(id, name, exclusive);
+            self.start_states.push(start_state);
+        }
+        Ok(off + line_len)
     }
 
     fn validate_start_state<'a>(
