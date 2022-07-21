@@ -67,7 +67,7 @@ impl fmt::Display for LexBuildError {
             LexErrorKind::UnknownStartState => "Start state not known",
             LexErrorKind::DuplicateStartState => "Start state already exists",
             LexErrorKind::InvalidStartState => "Invalid start state",
-            LexErrorKind::InvalidStartStateName => "Invalid start state",
+            LexErrorKind::InvalidStartStateName => "Invalid start state name",
             LexErrorKind::DuplicateName(_) => "Rule name already exists",
             LexErrorKind::RegexError => "Invalid regular expression",
         };
