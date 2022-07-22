@@ -130,8 +130,12 @@ impl<StorageT: TryFrom<usize>> LexParser<StorageT> {
     }
 
     fn declare_start_states(&mut self, exclusive: bool, off: usize, declaration_len: usize, line_len: usize) -> LexInternalBuildResult<usize> {
-        let start_states: HashSet<&str> = self.src[off + declaration_len..off + line_len]
-            .trim()
+        // Start state declarations are REQUIRED to have at least one start state name
+        let declaration_parameters = self.src[off + declaration_len..off + line_len].trim();
+        if declaration_parameters.is_empty() {
+            return Err(self.mk_error(LexErrorKind::UnknownDeclaration, off));
+        }
+        let start_states: HashSet<&str> = declaration_parameters
             .split_whitespace()
             .map(|name| self.validate_start_state(off, name))
             .collect::<LexInternalBuildResult<HashSet<&str>>>()?;
@@ -501,6 +505,151 @@ mod test {
                 assert_eq!(spans, &[Span::new(22, 25), Span::new(34, 37)])
             }
 
+            Err(e) => incorrect_errs!(src, e),
+        }
+    }
+
+    #[test]
+    fn start_state_declaration_containing_underscore() {
+        let src = "%start_state KNOWN
+%%
+<KNOWN>. 'known'"
+            .to_string();
+        match LRNonStreamingLexerDef::<DefaultLexeme<u8>, u8>::from_str(&src)
+            .as_ref()
+            .map_err(Vec::as_slice)
+        {
+            Ok(_) => panic!("Broken rule parsed"),
+            Err(
+                [LexBuildError {
+                    kind: LexErrorKind::UnknownDeclaration,
+                    span,
+                }],
+            ) if line_col!(src, span) == (1, 1) => (),
+            Err(e) => incorrect_errs!(src, e),
+        }
+    }
+
+    #[test]
+    fn start_state_declaration_missing() {
+        let src = "%s
+%%
+<KNOWN>. 'known'"
+            .to_string();
+        match LRNonStreamingLexerDef::<DefaultLexeme<u8>, u8>::from_str(&src)
+            .as_ref()
+            .map_err(Vec::as_slice)
+        {
+            Ok(_) => panic!("Broken rule parsed"),
+            Err(
+                [LexBuildError {
+                    kind: LexErrorKind::UnknownDeclaration,
+                    span,
+                }],
+            ) if line_col!(src, span) == (1, 1) => (),
+            Err(e) => incorrect_errs!(src, e),
+        }
+    }
+
+    #[test]
+    fn start_state_declaration_empty() {
+        let src = "%s
+%%
+<KNOWN>. 'known'"
+            .to_string();
+        match LRNonStreamingLexerDef::<DefaultLexeme<u8>, u8>::from_str(&src)
+            .as_ref()
+            .map_err(Vec::as_slice)
+        {
+            Ok(_) => panic!("Broken rule parsed"),
+            Err(
+                [LexBuildError {
+                    kind: LexErrorKind::UnknownDeclaration,
+                    span,
+                }],
+            ) if line_col!(src, span) == (1, 1) => (),
+            Err(e) => incorrect_errs!(src, e),
+        }
+    }
+
+    #[test]
+    fn start_state_name_alphanumeric_starting_number() {
+        let src = "%s 1KNOWN
+%%
+<KNOWN>. 'known'"
+            .to_string();
+        match LRNonStreamingLexerDef::<DefaultLexeme<u8>, u8>::from_str(&src)
+            .as_ref()
+            .map_err(Vec::as_slice)
+        {
+            Ok(_) => panic!("Broken rule parsed"),
+            Err(
+                [LexBuildError {
+                    kind: LexErrorKind::InvalidStartStateName,
+                    span,
+                }],
+            ) if line_col!(src, span) == (1, 1) => (),
+            Err(e) => incorrect_errs!(src, e),
+        }
+    }
+
+    #[test]
+    fn start_state_name_pure_numeric() {
+        let src = "%s 123
+%%
+<123>. 'known'"
+            .to_string();
+        match LRNonStreamingLexerDef::<DefaultLexeme<u8>, u8>::from_str(&src)
+            .as_ref()
+            .map_err(Vec::as_slice)
+        {
+            Ok(_) => panic!("Broken rule parsed"),
+            Err(
+                [LexBuildError {
+                    kind: LexErrorKind::InvalidStartStateName,
+                    span,
+                }],
+            ) if line_col!(src, span) == (1, 1) => (),
+            Err(e) => incorrect_errs!(src, e),
+        }
+    }
+
+    #[test]
+    fn rule_with_numeric_start_state() {
+        let src = "%%
+<1>. 'known'"
+            .to_string();
+        match LRNonStreamingLexerDef::<DefaultLexeme<u8>, u8>::from_str(&src)
+            .as_ref()
+            .map_err(Vec::as_slice)
+        {
+            Ok(_) => panic!("Broken rule parsed"),
+            Err(
+                [LexBuildError {
+                    kind: LexErrorKind::UnknownStartState,
+                    span,
+                }],
+            ) if line_col!(src, span) == (2, 1) => (),
+            Err(e) => incorrect_errs!(src, e),
+        }
+    }
+
+    #[test]
+    fn transition_to_numeric_start_state() {
+        let src = "%%
+. <1>'known'"
+            .to_string();
+        match LRNonStreamingLexerDef::<DefaultLexeme<u8>, u8>::from_str(&src)
+            .as_ref()
+            .map_err(Vec::as_slice)
+        {
+            Ok(_) => panic!("Broken rule parsed"),
+            Err(
+                [LexBuildError {
+                    kind: LexErrorKind::UnknownStartState,
+                    span,
+                }],
+            ) if line_col!(src, span) == (2, 3) => (),
             Err(e) => incorrect_errs!(src, e),
         }
     }
