@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"struct":[["YaccFirsts","`Firsts` stores all the first sets for a given grammar. For example, given this code and grammar:"]]};

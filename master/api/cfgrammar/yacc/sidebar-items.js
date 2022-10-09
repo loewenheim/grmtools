@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"enum":[["YaccKind","The particular Yacc variant this grammar makes use of."],["YaccOriginalActionKind",""]],"mod":[["ast",""],["firsts",""],["follows",""],["grammar",""],["parser",""]]};
